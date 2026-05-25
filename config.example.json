@@ -16,5 +16,6 @@
   "force": false,
   "hardware_device": "auto",
   "manifest_path": "processing_report.csv",
-  "realesrgan_executable": "realesrgan-ncnn-vulkan"
+  "realesrgan_executable": "auto",
+  "realesrgan_model": "realesrgan-x4plus"
 }

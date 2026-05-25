@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import importlib.util
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -43,7 +45,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "force": False,
     "hardware_device": "auto",
     "manifest_path": "processing_report.csv",
-    "realesrgan_executable": "realesrgan-ncnn-vulkan",
+    "realesrgan_executable": "auto",
+    "realesrgan_model": "realesrgan-x4plus",
 }
 
 
@@ -73,6 +76,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest-path", help="CSV manifest path.")
     parser.add_argument("--hardware-device", choices=["auto", "cpu", "gpu"], help="Requested processing device.")
     parser.add_argument("--realesrgan-executable", help="Real-ESRGAN executable path/name.")
+    parser.add_argument("--realesrgan-model", help="Real-ESRGAN ncnn model name.")
+    parser.add_argument("--preflight-only", action="store_true", help="Validate setup and exit without processing.")
     parser.add_argument("--dry-run", action="store_true", help="Print planned mappings without writing files.")
     parser.add_argument("--force", action="store_true", help="Reprocess files even when outputs are current.")
     parser.add_argument("--no-remove-background", action="store_false", dest="remove_background")
@@ -101,6 +106,7 @@ def load_config(args: argparse.Namespace) -> dict[str, Any]:
         "manifest_path",
         "hardware_device",
         "realesrgan_executable",
+        "realesrgan_model",
     ):
         value = getattr(args, key, None)
         if value is not None:
@@ -145,6 +151,72 @@ def discover_images(input_dir: Path, sample_limit: int | None) -> list[Path]:
     return images
 
 
+def resolve_realesrgan_executable(config: dict[str, Any]) -> Path | None:
+    configured = str(config["realesrgan_executable"])
+    candidates: list[Path] = []
+
+    if configured != "auto":
+        configured_path = Path(configured)
+        if configured_path.exists():
+            candidates.append(configured_path)
+        resolved = shutil.which(configured)
+        if resolved:
+            candidates.append(Path(resolved))
+
+    local_tool = Path("tools/realesrgan-ncnn-vulkan")
+    candidates.append(local_tool)
+
+    path_tool = shutil.which("realesrgan-ncnn-vulkan")
+    if path_tool:
+        candidates.append(Path(path_tool))
+
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def realesrgan_model_dir(executable: Path) -> Path | None:
+    local_models = executable.parent / "models"
+    if local_models.exists():
+        return local_models
+
+    project_models = Path("tools/models")
+    if project_models.exists():
+        return project_models
+
+    return None
+
+
+def preflight(config: dict[str, Any], images: list[Path]) -> list[str]:
+    errors: list[str] = []
+
+    if not images:
+        errors.append(f"No supported images found in {config['input_dir']}.")
+
+    if config["remove_background"] and importlib.util.find_spec("rembg") is None:
+        errors.append("Background removal is enabled, but rembg is not installed.")
+
+    if config["optimize"] and importlib.util.find_spec("PIL") is None:
+        errors.append("Optimization is enabled, but Pillow is not installed.")
+
+    if config["upscale"]:
+        executable = resolve_realesrgan_executable(config)
+        if executable is None:
+            errors.append("Upscaling is enabled, but realesrgan-ncnn-vulkan was not found.")
+        elif not os.access(executable, os.X_OK):
+            errors.append(f"Real-ESRGAN executable is not executable: {executable}.")
+        else:
+            model_dir = realesrgan_model_dir(executable)
+            model_name = str(config["realesrgan_model"])
+            if model_dir is None:
+                errors.append("Upscaling is enabled, but no Real-ESRGAN models directory was found.")
+            elif not (model_dir / f"{model_name}.param").exists() or not (model_dir / f"{model_name}.bin").exists():
+                errors.append(f"Real-ESRGAN model files not found for {model_name} in {model_dir}.")
+
+    return errors
+
+
 def output_path_for(source: Path, input_dir: Path, output_dir: Path, output_format: str) -> Path:
     relative = source.relative_to(input_dir)
     extension = ".jpg" if output_format == "jpeg" else f".{output_format}"
@@ -174,12 +246,17 @@ def remove_background(source: Path, destination: Path) -> None:
 
 
 def run_realesrgan(source: Path, destination: Path, config: dict[str, Any]) -> None:
-    executable = shutil.which(str(config["realesrgan_executable"]))
+    executable_path = resolve_realesrgan_executable(config)
+    executable = str(executable_path) if executable_path else None
     if executable is None:
         raise RuntimeError(
             f"Real-ESRGAN executable not found: {config['realesrgan_executable']}. "
             "Install it or run with --no-upscale."
         )
+
+    model_dir = realesrgan_model_dir(Path(executable))
+    if model_dir is None:
+        raise RuntimeError("Real-ESRGAN models directory not found. Install the ncnn Vulkan package with models.")
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     command = [
@@ -190,6 +267,10 @@ def run_realesrgan(source: Path, destination: Path, config: dict[str, Any]) -> N
         str(destination),
         "-s",
         str(config["upscale_factor"]),
+        "-m",
+        str(model_dir),
+        "-n",
+        str(config["realesrgan_model"]),
     ]
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     if completed.returncode != 0:
@@ -342,6 +423,15 @@ def main() -> int:
 
     if config["dry_run"]:
         print_dry_run(images, input_dir, output_dir, config)
+        return 0
+
+    preflight_errors = preflight(config, images)
+    if preflight_errors:
+        for error in preflight_errors:
+            logging.error("Preflight failed: %s", error)
+        return 2
+    if getattr(args, "preflight_only", False):
+        logging.info("Preflight passed")
         return 0
 
     output_dir.mkdir(parents=True, exist_ok=True)
