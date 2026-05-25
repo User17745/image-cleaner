@@ -65,6 +65,12 @@ project-root/
 | Logging                   | Generate processing logs              |
 | Failure handling          | Skip failed images and continue       |
 | Idempotent runs           | Safe re-runs                          |
+| Dry-run mode              | Preview planned processing without writing outputs |
+| Stage toggles             | Enable/disable background removal, upscaling, and optimization |
+| QA sample mode            | Process a small configurable sample before full batch |
+| Processing manifest       | Generate structured per-file processing report |
+| Output format selection   | Support WebP by default with optional PNG/JPEG/AVIF |
+| Hardware fallback         | Detect GPU/CPU capabilities and fall back predictably |
 
 ---
 
@@ -199,6 +205,8 @@ curl -L https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRG
   * png
   * webp
 * Preserve all relative paths from `source_images`
+* Support dry-run mode to print planned source-to-output mappings without processing files
+* Support sample mode to process a limited number of discovered images for QA
 
 ## Output Example
 
@@ -220,6 +228,7 @@ output_images/catalog/shirt/red/front.webp
 
 * Remove old graphical backgrounds
 * Preserve transparent edges
+* Allow this stage to be enabled or disabled via config/CLI
 * Use:
 
   * `u2net` model
@@ -253,6 +262,10 @@ Real-ESRGAN
 * 2x or 4x upscale
 * Maintain product realism
 * Avoid oversharpening
+* Allow this stage to be enabled or disabled via config/CLI
+* Detect GPU availability when supported
+* Fall back to CPU processing when GPU acceleration is unavailable
+* Log the selected execution device for each run
 
 ## Recommended Model
 
@@ -280,6 +293,9 @@ temp/upscaled/
 | Resize if needed          | max 2000px       |
 | Strip metadata            | reduce file size |
 | Optional white background | configurable     |
+| Output format             | WebP default; PNG/JPEG/AVIF optional |
+
+Allow this stage to be enabled or disabled via config/CLI.
 
 ---
 
@@ -301,6 +317,25 @@ source_images/furniture/chair1.jpg
 output_images/furniture/chair1.webp
 ```
 
+## Idempotency Requirements
+
+* Skip files when the output already exists and is newer than or equal to the source image
+* Reprocess files when the source image has changed since the output was generated
+* Provide a force mode to reprocess all files regardless of output state
+* Keep deterministic temp paths derived from each image's relative input path
+
+Example:
+
+```text
+source_images/catalog/shirt/red/front.jpg
+↓
+temp/bg_removed/catalog/shirt/red/front.png
+↓
+temp/upscaled/catalog/shirt/red/front.png
+↓
+output_images/catalog/shirt/red/front.webp
+```
+
 ---
 
 # Developer Tasks Breakdown
@@ -317,6 +352,10 @@ output_images/furniture/chair1.webp
 | Config system            | Dev   | Medium   |
 | README/documentation     | Dev   | Medium   |
 | QA review tooling        | Dev   | Low      |
+| Dry-run/sample modes     | Dev   | Medium   |
+| Processing manifest      | Dev   | Medium   |
+| Hardware detection       | Dev   | Medium   |
+| Stage toggle support     | Dev   | Medium   |
 
 ---
 
@@ -330,13 +369,31 @@ Example:
 {
   "input_dir": "source_images",
   "output_dir": "output_images",
+  "temp_dir": "temp",
   "upscale_factor": 4,
   "webp_quality": 90,
+  "output_format": "webp",
   "max_dimension": 2000,
   "background": "transparent",
-  "parallel_workers": 4
+  "parallel_workers": 4,
+  "remove_background": true,
+  "upscale": true,
+  "optimize": true,
+  "dry_run": false,
+  "sample_limit": null,
+  "force": false,
+  "hardware_device": "auto",
+  "manifest_path": "processing_report.csv"
 }
 ```
+
+## Config Behavior
+
+* CLI arguments should override config file values
+* `hardware_device` should support `auto`, `cpu`, and GPU-specific options where available
+* `sample_limit` should process only the first N discovered images when set
+* `dry_run` should not create output files or temp files
+* `force` should bypass idempotency checks and reprocess all images
 
 ---
 
@@ -360,12 +417,18 @@ Pipeline must:
 
   * `success.log`
   * `failed.log`
+  * `processing_report.csv` or `processing_report.json`
+* include each file's status, input path, output path, dimensions, duration, selected stages, and error details in the processing report
+* distinguish skipped files from successful processed files
+* log selected hardware mode and fallback events
 
 Failure examples:
 
 * corrupt image
 * unsupported format
 * AI inference failure
+* missing model weights
+* unavailable GPU acceleration
 
 ---
 
@@ -382,6 +445,11 @@ Failure examples:
 | Folder structure maintained | Exact mapping          |
 | Transparent PNG handling    | Correct                |
 | WebP rendering              | Works in browser       |
+| Dry-run output              | Planned mappings are correct |
+| Sample mode                 | Limited QA batch works before full run |
+| Idempotent skipping         | Unchanged files are skipped correctly |
+| Stage toggles               | Each stage can run independently |
+| Hardware fallback           | CPU fallback works when GPU is unavailable |
 
 ---
 
@@ -395,6 +463,10 @@ Failure examples:
 | Config system             | Tunable settings   |
 | Logs                      | Debugging          |
 | Example processed outputs | QA samples         |
+| Processing manifest       | Per-file audit trail |
+| Dry-run mode              | Safe preview command |
+| Sample processing mode    | Small-batch QA workflow |
+| Hardware fallback         | Portable CPU/GPU behavior |
 
 ---
 
@@ -410,6 +482,30 @@ Optional:
 
 ```bash
 python process_images.py --input source_images --output output_images
+```
+
+Dry run:
+
+```bash
+python process_images.py --dry-run
+```
+
+Sample QA run:
+
+```bash
+python process_images.py --sample-limit 10
+```
+
+Force reprocess:
+
+```bash
+python process_images.py --force
+```
+
+Disable selected stages:
+
+```bash
+python process_images.py --no-upscale
 ```
 
 ---
