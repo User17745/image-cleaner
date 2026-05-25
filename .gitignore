@@ -3,3 +3,15 @@ source_images/*
 
 output_images/*
 !output_images/.gitkeep
+
+temp/
+config.json
+process_images.log
+success.log
+failed.log
+processing_report.csv
+processing_report.json
+venv/
+.venv/
+__pycache__/
+.DS_Store

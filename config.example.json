@@ -1,0 +1,20 @@
+{
+  "input_dir": "source_images",
+  "output_dir": "output_images",
+  "temp_dir": "temp",
+  "upscale_factor": 4,
+  "webp_quality": 90,
+  "output_format": "webp",
+  "max_dimension": 2000,
+  "background": "transparent",
+  "parallel_workers": 4,
+  "remove_background": true,
+  "upscale": true,
+  "optimize": true,
+  "dry_run": false,
+  "sample_limit": null,
+  "force": false,
+  "hardware_device": "auto",
+  "manifest_path": "processing_report.csv",
+  "realesrgan_executable": "realesrgan-ncnn-vulkan"
+}
