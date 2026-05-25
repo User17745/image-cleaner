@@ -9,6 +9,7 @@
   "background": "transparent",
   "parallel_workers": 4,
   "remove_background": true,
+  "background_model": "u2net",
   "upscale": true,
   "optimize": true,
   "dry_run": false,

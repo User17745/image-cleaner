@@ -38,6 +38,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "background": "transparent",
     "parallel_workers": 4,
     "remove_background": True,
+    "background_model": "u2net",
     "upscale": True,
     "optimize": True,
     "dry_run": False,
@@ -74,6 +75,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--parallel-workers", type=int, help="Number of worker threads.")
     parser.add_argument("--sample-limit", type=int, help="Process only the first N discovered images.")
     parser.add_argument("--manifest-path", help="CSV manifest path.")
+    parser.add_argument("--background-model", help="rembg model name for background removal.")
     parser.add_argument("--hardware-device", choices=["auto", "cpu", "gpu"], help="Requested processing device.")
     parser.add_argument("--realesrgan-executable", help="Real-ESRGAN executable path/name.")
     parser.add_argument("--realesrgan-model", help="Real-ESRGAN ncnn model name.")
@@ -104,6 +106,7 @@ def load_config(args: argparse.Namespace) -> dict[str, Any]:
         "parallel_workers",
         "sample_limit",
         "manifest_path",
+        "background_model",
         "hardware_device",
         "realesrgan_executable",
         "realesrgan_model",
@@ -234,15 +237,16 @@ def should_skip(source: Path, output: Path, force: bool) -> bool:
     return output.stat().st_mtime >= source.stat().st_mtime
 
 
-def remove_background(source: Path, destination: Path) -> None:
+def remove_background(source: Path, destination: Path, model_name: str) -> None:
     try:
-        from rembg import remove
+        from rembg import new_session, remove
     except ImportError as exc:
         raise RuntimeError("rembg is not installed. Install requirements or use --no-remove-background.") from exc
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     data = source.read_bytes()
-    destination.write_bytes(remove(data))
+    session = new_session(model_name)
+    destination.write_bytes(remove(data, session=session))
 
 
 def run_realesrgan(source: Path, destination: Path, config: dict[str, Any]) -> None:
@@ -347,9 +351,9 @@ def process_one(source: Path, input_dir: Path, output_dir: Path, config: dict[st
         current = source
         if config["remove_background"]:
             bg_removed = temp_path_for(source, input_dir, Path(config["temp_dir"]), "bg_removed")
-            remove_background(current, bg_removed)
+            remove_background(current, bg_removed, str(config["background_model"]))
             current = bg_removed
-            stages.append("background_removal")
+            stages.append(f"background_removal:{config['background_model']}")
 
         if config["upscale"]:
             upscaled = temp_path_for(source, input_dir, Path(config["temp_dir"]), "upscaled")
